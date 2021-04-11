@@ -35,7 +35,17 @@
 layout (location = 0) in ivec4 VertexPosition;
 layout (location = 1) in vec4 uv;
 
-#include uniform_table.glsl
+layout(std140) uniform uniforms {
+  int cameraYaw;
+  int cameraPitch;
+  int centerX;
+  int centerY;
+  int zoom;
+  int cameraX;
+  int cameraY;
+  int cameraZ;
+  ivec2 sinCosTable[2048];
+};
 
 uniform float brightness;
 uniform int useFog;
@@ -63,16 +73,6 @@ void main()
   float a = float(ahsl >> 24 & 0xff) / 255.f;
 
   vec3 rgb = hslToRgb(hsl);
-  float xCenterDist = (vertex.x / TILE_SIZE) - (playerX + 0.5);
-  float zCenterDist = (vertex.z / TILE_SIZE) - (playerY + 0.5);
-  float compDist = sqrt((xCenterDist * xCenterDist) + (zCenterDist * zCenterDist));
-
-  float maxDist = 5f;
-  if(compDist < maxDist) {
-    float workDist = compDist / maxDist;
-    a = a * workDist;
-
-  } else rgb = vec3(0, 0, 0);
 
   gl_Position = projectionMatrix * vec4(vertex, 1.f);
   Color = vec4(rgb, 1.f - a);

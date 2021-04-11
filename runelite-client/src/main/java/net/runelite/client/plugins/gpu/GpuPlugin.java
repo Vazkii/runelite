@@ -24,26 +24,25 @@
  */
 package net.runelite.client.plugins.gpu;
 
+import com.google.common.primitives.Ints;
+import com.google.inject.Provides;
+import com.jogamp.nativewindow.awt.AWTGraphicsConfiguration;
+import com.jogamp.nativewindow.awt.JAWTWindow;
+import com.jogamp.opengl.GL;
 import static com.jogamp.opengl.GL.GL_ARRAY_BUFFER;
 import static com.jogamp.opengl.GL.GL_DYNAMIC_DRAW;
 import static com.jogamp.opengl.GL2ES2.GL_STREAM_DRAW;
 import static com.jogamp.opengl.GL2ES3.GL_STATIC_COPY;
 import static com.jogamp.opengl.GL2ES3.GL_UNIFORM_BUFFER;
-import static net.runelite.client.plugins.gpu.GLUtil.glDeleteBuffer;
-import static net.runelite.client.plugins.gpu.GLUtil.glDeleteFrameBuffer;
-import static net.runelite.client.plugins.gpu.GLUtil.glDeleteRenderbuffers;
-import static net.runelite.client.plugins.gpu.GLUtil.glDeleteTexture;
-import static net.runelite.client.plugins.gpu.GLUtil.glDeleteVertexArrays;
-import static net.runelite.client.plugins.gpu.GLUtil.glGenBuffers;
-import static net.runelite.client.plugins.gpu.GLUtil.glGenFrameBuffer;
-import static net.runelite.client.plugins.gpu.GLUtil.glGenRenderbuffer;
-import static net.runelite.client.plugins.gpu.GLUtil.glGenTexture;
-import static net.runelite.client.plugins.gpu.GLUtil.glGenVertexArrays;
-import static net.runelite.client.plugins.gpu.GLUtil.glGetInteger;
-import static org.jocl.CL.CL_MEM_READ_ONLY;
-import static org.jocl.CL.CL_MEM_WRITE_ONLY;
-import static org.jocl.CL.clCreateFromGLBuffer;
-
+import com.jogamp.opengl.GL4;
+import com.jogamp.opengl.GLCapabilities;
+import com.jogamp.opengl.GLContext;
+import com.jogamp.opengl.GLDrawable;
+import com.jogamp.opengl.GLDrawableFactory;
+import com.jogamp.opengl.GLException;
+import com.jogamp.opengl.GLFBODrawable;
+import com.jogamp.opengl.GLProfile;
+import com.jogamp.opengl.math.Matrix4;
 import java.awt.Canvas;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
@@ -56,27 +55,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
-
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
-
-import org.jocl.CL;
-
-import com.google.common.primitives.Ints;
-import com.google.inject.Provides;
-import com.jogamp.nativewindow.awt.AWTGraphicsConfiguration;
-import com.jogamp.nativewindow.awt.JAWTWindow;
-import com.jogamp.opengl.GL;
-import com.jogamp.opengl.GL4;
-import com.jogamp.opengl.GLCapabilities;
-import com.jogamp.opengl.GLContext;
-import com.jogamp.opengl.GLDrawable;
-import com.jogamp.opengl.GLDrawableFactory;
-import com.jogamp.opengl.GLException;
-import com.jogamp.opengl.GLFBODrawable;
-import com.jogamp.opengl.GLProfile;
-import com.jogamp.opengl.math.Matrix4;
-
 import jogamp.nativewindow.SurfaceScaleUtils;
 import jogamp.nativewindow.jawt.x11.X11JAWTWindow;
 import jogamp.nativewindow.macosx.OSXUtil;
@@ -94,7 +74,6 @@ import net.runelite.api.SceneTileModel;
 import net.runelite.api.SceneTilePaint;
 import net.runelite.api.Texture;
 import net.runelite.api.TextureProvider;
-import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.hooks.DrawCallbacks;
 import net.runelite.client.callback.ClientThread;
@@ -104,11 +83,26 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.PluginInstantiationException;
 import net.runelite.client.plugins.PluginManager;
+import static net.runelite.client.plugins.gpu.GLUtil.glDeleteBuffer;
+import static net.runelite.client.plugins.gpu.GLUtil.glDeleteFrameBuffer;
+import static net.runelite.client.plugins.gpu.GLUtil.glDeleteRenderbuffers;
+import static net.runelite.client.plugins.gpu.GLUtil.glDeleteTexture;
+import static net.runelite.client.plugins.gpu.GLUtil.glDeleteVertexArrays;
+import static net.runelite.client.plugins.gpu.GLUtil.glGenBuffers;
+import static net.runelite.client.plugins.gpu.GLUtil.glGenFrameBuffer;
+import static net.runelite.client.plugins.gpu.GLUtil.glGenRenderbuffer;
+import static net.runelite.client.plugins.gpu.GLUtil.glGenTexture;
+import static net.runelite.client.plugins.gpu.GLUtil.glGenVertexArrays;
+import static net.runelite.client.plugins.gpu.GLUtil.glGetInteger;
 import net.runelite.client.plugins.gpu.config.AntiAliasingMode;
 import net.runelite.client.plugins.gpu.config.UIScalingMode;
 import net.runelite.client.plugins.gpu.template.Template;
 import net.runelite.client.ui.DrawManager;
 import net.runelite.client.util.OSType;
+import org.jocl.CL;
+import static org.jocl.CL.CL_MEM_READ_ONLY;
+import static org.jocl.CL.CL_MEM_WRITE_ONLY;
+import static org.jocl.CL.clCreateFromGLBuffer;
 
 @PluginDescriptor(
 	name = "GPU",
@@ -190,8 +184,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	static final Shader UI_PROGRAM = new Shader()
 		.add(GL4.GL_VERTEX_SHADER, "vertui.glsl")
 		.add(GL4.GL_FRAGMENT_SHADER, "fragui.glsl");
-	
-	static final int UNIFORM_TABLE_COUNT = 10;
 
 	private int glProgram;
 	private int glComputeProgram;
@@ -718,8 +710,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	{
 		initGlBuffer(uniformBuffer);
 
-		IntBuffer uniformBuf = GpuIntBuffer.allocateDirect(UNIFORM_TABLE_COUNT + 2048 * 4);
-		uniformBuf.put(new int[UNIFORM_TABLE_COUNT]); // uniform block
+		IntBuffer uniformBuf = GpuIntBuffer.allocateDirect(8 + 2048 * 4);
+		uniformBuf.put(new int[8]); // uniform block
 		final int[] pad = new int[2];
 		for (int i = 0; i < 2048; i++)
 		{
@@ -785,26 +777,22 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	{
 		yaw = client.getCameraYaw();
 		pitch = client.getCameraPitch();
-		
 
 		final Scene scene = client.getScene();
-		final LocalPoint playerPos = client.getLocalPlayer().getLocalLocation();
 		scene.setDrawDistance(getDrawDistance());
 
 		invokeOnMainThread(() ->
 		{
-			// UBO. Only the first few needed bytes get modified here, the rest is the constant sin/cos table.
+			// UBO. Only the first 32 bytes get modified here, the rest is the constant sin/cos table.
 			// We can reuse the vertex buffer since it isn't used yet.
 			vertexBuffer.clear();
-			vertexBuffer.ensureCapacity(UNIFORM_TABLE_COUNT * Integer.BYTES);
+			vertexBuffer.ensureCapacity(32);
 			IntBuffer uniformBuf = vertexBuffer.getBuffer();
 			uniformBuf
 				.put(yaw)
 				.put(pitch)
 				.put(client.getCenterX())
 				.put(client.getCenterY())
-				.put(playerPos.getSceneX())
-				.put(playerPos.getSceneY())
 				.put(client.getScale())
 				.put(cameraX)
 				.put(cameraY)
